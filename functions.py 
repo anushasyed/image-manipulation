@@ -1,0 +1,135 @@
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+import skimage.transform as sktr
+import skimage.io as skio
+import skimage as sk
+import skimage.filters as filters
+import skimage.color as colors
+from align_image_code import align_images
+
+
+### Function that sharpens an image using a Gaussian Stack
+def sharpen(im_path):
+    im = skio.imread(im_path)
+    im = sk.img_as_float(im)
+    gaussian = filters.gaussian(im, sigma=3)
+    detail = im - gaussian
+    detail[ detail < 0 ] = 0
+    detail[ detail > 255 ] = 255
+    sharpened = detail + im
+    sharpened[ sharpened < 0 ] = 0
+    sharpened[ sharpened > 255 ] = 255
+    skio.imshow(sharpened)
+    skio.show()
+
+### Function that creates a Gaussian Stack
+def gaussian_stack(im, N=5):
+    sigma = 2
+    stack = []
+    temp = im
+    for i in range(N):
+        gauss = filters.gaussian(temp, sigma, multichannel=True, mode='reflect', preserve_range=True)
+        gauss[gauss > 255] = 255
+        gauss[gauss < 0] = 0
+        stack.append(gauss)
+        sigma *= 2
+        temp = gauss
+    return stack
+
+### Function that creates a Laplacian Stack
+def laplacian_stack(im, N=5):
+    stack = []
+    temp = im
+    for i in range(N):
+        gauss = filters.gaussian(temp, 2**i, multichannel=True, mode='reflect', preserve_range=True)
+        laplace = temp - gauss
+        laplace[laplace > 255] = 255
+        laplace[laplace < 0] = 0
+        stack.append(laplace)
+        temp = laplace
+    return stack
+
+
+### Creates bit mask using dimensions of IMG
+def generate_mask(img1):
+    mask = np.concatenate((np.ones((img1.shape[0], img1.shape[1]//2, img1.shape[2])), (np.zeros((img1.shape[0], img1.shape[1]//2, img1.shape[2])))), axis=1)
+    return mask
+
+
+### Blends images together
+def blend_images(im1, im2, N=5):
+    #read and align images
+    #read in with rgb = true to create third dimension
+    im1, im2 = skio.imread(im1), skio.imread(im2)
+    im1, im2 = sk.img_as_float(im1), sk.img_as_float(im2)
+    if (im1.shape != im2.shape):
+        im1, im2 = align_images(im1, im2)
+
+    #apply laplacian filter to images
+    laplace_im1, laplace_im2 = laplacian_stack(im1), laplacian_stack(im2)
+    gauss_im1 = filters.gaussian(im1, sigma=1, multichannel=True, mode='reflect', preserve_range=True)
+    gauss_im2 = filters.gaussian(im2, sigma=1, multichannel=True, mode='reflect', preserve_range=True)
+    laplace_im1.pop()
+    laplace_im1.append(gauss_im1)
+    laplace_im2.pop()
+    laplace_im2.append(gauss_im2)
+    
+    #create the mask
+    mask = generate_mask(im1)
+    mask = sk.img_as_float(mask)
+    #apply gaussian to mask
+    gauss_mask = gaussian_stack(mask)
+    
+    #zip stacks 
+    stax = zip(laplace_im1, laplace_im2, gauss_mask)
+    #construct image
+    ls = []
+    for la, lb, gr in stax:
+        val = (gr)*(la) + ((1-gr)*(lb))
+        ls.append(val)
+    ls = np.array(ls)
+
+    #put together stack
+    final_img = 0
+    i = 0
+    for img in ls:
+        if i==0:
+            final_img = img
+        else:
+            final_img += img
+        final_img[final_img < 0 ] = 0
+        final_img[final_img > 255] = 255
+        i += 1
+    np.clip(final_img, 0, 1)
+    skio.imshow(final_img)
+    skio.show()
+
+### Creates Hybrid of two images
+def hybrid_image(im1, im2, sigma1, sigma2):
+
+    low_pass_im_1 = filters.gaussian(im1, sigma1) #low frequency image using gaussian
+    gaussian_2 = filters.gaussian(im2, sigma2)
+    high_pass_im = im2 - gaussian_2 #high frequency image using original - gaussian
+    hybrid_im = (low_pass_im_1) + (high_pass_im)
+    hybrid_im[ hybrid_im < 0 ] = 0
+    hybrid_im[ hybrid_im > 255 ] = 255
+    return hybrid_im
+
+### Pre-process each image before creating Hybrid. 
+def process_hybrid(im1_name, im2_name):
+    im1 = plt.imread(im1_name)
+    im1 = sk.img_as_float(im1)
+    # low sf
+    im2 = plt.imread(im2_name)
+    im2 = sk.img_as_float(im2)
+
+    if (im1.shape != im2.shape):
+        im1_aligned, im2_aligned = align_images(im1, im2)
+    else:  
+        im1_aligned, im2_aligned = im1, im2
+    sigma1 = 4
+    sigma2 = 3
+    hybrid = hybrid_image(im1_aligned, im2_aligned, sigma1, sigma2)
+
+
